@@ -1,0 +1,405 @@
+#include "ds18b20.h"
+
+
+//返回浮点数的温度值，单位℃
+double DS18B20_ReadFloat(uint8_t channel)
+{
+	double result;
+	uint8_t msb, lsb;
+	uint16_t temp;
+  if(!DS18B20_Rst(channel))
+		return 0;
+  DS18B20_Write_Byte(channel, 0xcc);	
+  DS18B20_Write_Byte(channel, 0x44);
+  DS18B20_Rst(channel);
+  DS18B20_Write_Byte(channel, 0xcc);
+  DS18B20_Write_Byte(channel, 0xbe);
+    
+  lsb = DS18B20_Read_Byte(channel); 
+  msb = DS18B20_Read_Byte(channel);
+	temp = (msb << 8) | lsb;
+	if(temp > 0xf800)
+	{
+		temp = ~(temp-1);
+	}
+	result = temp*0.0625;
+	
+	return result;
+}
+
+void delay_us(uint16_t time)
+{
+	uint16_t i=0;  
+	for(i=0; i<time; i++)
+	{
+		__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();
+		__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();
+		__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();__NOP();
+	}
+}
+
+void DS18B20_Init(void)
+{
+	GPIO_InitTypeDef        GPIO_InitStructure;
+	
+  RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOC, (FunctionalState)ENABLE);
+
+  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0 | GPIO_Pin_1 | GPIO_Pin_2 | GPIO_Pin_3;
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+  GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+  GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+  GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;
+  GPIO_Init(GPIOC, &GPIO_InitStructure);
+	
+	DS18B20_ReadFloat(CH1);
+	DS18B20_ReadFloat(CH2);
+	DS18B20_ReadFloat(CH3);
+	DS18B20_ReadFloat(CH4);	
+}
+
+void DS18B20_IO_OUT(uint8_t channel, uint8_t level)
+{
+	uint16_t GPIO_Pin_x;
+	
+	switch(channel)
+	{
+		case CH1:
+			GPIO_Pin_x = GPIO_Pin_0;
+		break;
+		case CH2:
+			GPIO_Pin_x = GPIO_Pin_1;
+		break;
+		case CH3:
+			GPIO_Pin_x = GPIO_Pin_2;
+		break;
+		case CH4:
+			GPIO_Pin_x = GPIO_Pin_3;
+		break;
+		default:
+			break;
+	}
+	if(level != 0)
+	{
+		GPIO_SetBits(GPIOC, GPIO_Pin_x);
+	}
+	else
+	{
+		GPIO_ResetBits(GPIOC, GPIO_Pin_x);
+	}
+}
+
+uint8_t DS18B20_IO_IN(uint8_t channel)
+{
+  uint8_t level;
+	uint16_t GPIO_Pin_x;
+	
+	switch(channel)
+	{
+		case CH1:
+			GPIO_Pin_x = GPIO_Pin_0;
+		break;
+		case CH2:
+			GPIO_Pin_x = GPIO_Pin_1;
+		break;
+		case CH3:
+			GPIO_Pin_x = GPIO_Pin_2;
+		break;
+		case CH4:
+			GPIO_Pin_x = GPIO_Pin_3;
+		break;
+		default:
+			break;
+	}
+	level = GPIO_ReadInputDataBit(GPIOC, GPIO_Pin_x);
+	return level;
+}
+
+//================================================================
+//单总线复位
+//成功检测到有芯片，返回1，否则返回0
+//================================================================
+uint8_t DS18B20_Rst(uint8_t channel) 
+{
+  uint8_t ret=0;
+	DS18B20_IO_OUT(channel, 1);
+	delay_us(2);
+	DS18B20_IO_OUT(channel, 0);
+	delay_us(500);
+	DS18B20_IO_OUT(channel, 1);
+	delay_us(70);
+	if(DS18B20_IO_IN(channel) == 0)
+		ret = 1;
+	else
+		ret = 0;
+	delay_us(500);
+  return ret;
+} 
+
+uint8_t CheckChannelCon(void)
+{
+	uint8_t channel = 0;
+	if(DS18B20_Rst(CH1) == 1)
+		channel |= 0x01;
+	if(DS18B20_Rst(CH2) == 1)
+		channel |= 0x02;
+	if(DS18B20_Rst(CH3) == 1)
+		channel |= 0x04;
+	if(DS18B20_Rst(CH4) == 1)
+		channel |= 0x08;
+	return channel;
+}
+
+  //================================================================
+//单总线读一字节
+//同时返回该数据
+//================================================================
+uint8_t DS18B20_Read_Byte(uint8_t channel) 
+{ 
+  uint8_t data=0; 
+  uint8_t i=0;
+	for(i=0; i<8; i++)
+	{
+		DS18B20_IO_OUT(channel, 0);
+		delay_us(2);
+		data >>= 1;
+		DS18B20_IO_OUT(channel, 1);
+		delay_us(5);
+		if(DS18B20_IO_IN(channel))
+			data |= 0x80;
+		delay_us(50);
+	}
+  return data;	
+}
+  
+
+
+
+//================================================================
+//单总线写一字节
+//================================================================
+void DS18B20_Write_Byte(uint8_t channel,uint8_t data) 
+{ 
+  uint8_t i=0;
+	for(i=0; i<8; i++)
+	{
+		DS18B20_IO_OUT(channel, 0);
+		delay_us(2);
+		if(data&0x01)
+			DS18B20_IO_OUT(channel, 1);
+		else
+			DS18B20_IO_OUT(channel, 0);
+		delay_us(58);
+		DS18B20_IO_OUT(channel, 1);
+		delay_us(2);
+		data >>= 1;
+	}
+} 
+
+
+//================================================================
+//CRC校验程序
+//正常数据为0，异常为1
+//================================================================
+
+uint8_t crc8Check(uint8_t *ptr, uint8_t len)   
+{ 
+  uint8_t i; 
+  uint8_t crc=0; 
+  while(len--!=0)   
+  { 
+    for(i=1; i!=0; i*=2) 
+    { 
+      if((crc&1)!=0) {crc/=2; crc^=0x8C;} 
+      else crc/=2; 
+      if((*ptr&i)!=0) crc^=0x8C;     
+     }   
+    ptr++; 
+   } 
+  return(crc); 
+}
+
+//================================================================
+//读出温度芯片唯一的机身码，64bit.
+//读出以后将进行crc校验	
+//成功转换返回1，否则返回0
+//================================================================
+uint8_t Ds18b20ReadRom(uint8_t channel,uint8_t *code) 
+{
+  uint8_t temp=0;
+  //关中断 
+	
+  EnAbleTime(OFF);
+
+	
+	 //初始化
+  if(DS18B20_Rst(channel)==0)
+  { 
+    EnAbleTime(ON);	
+    return 0;
+  }
+
+  DS18B20_Write_Byte(channel,DS18B20_READ_ROM);		//开始转换命令
+	
+  for(temp=0;temp<8;temp++)
+  {
+    code[temp]=DS18B20_Read_Byte(channel);
+  }
+  //开中断 
+  EnAbleTime(ON);
+
+	
+  if(crc8Check(code,8)==0) return 1;
+  else return 0;
+}
+
+
+//冒泡
+void BubbleSort2(int8_t *num, uint8_t n)
+{
+    uint16_t i, j;
+    for(i = 0; i < n; i++)
+    {
+        for(j = 0; i + j < n - 1; j++)
+        {
+            if(num[j] > num[j + 1])
+            {
+                int temp = num[j];
+                num[j] = num[j + 1];
+                num[j + 1] = temp;
+            }
+        }
+    }
+}
+
+int8_t DS18B20_Read(uint8_t channel)
+{
+  int8_t Temp;
+  
+  EnAbleTime(OFF);
+  switch (channel)
+  {
+    case CH1:
+      Temp=DS18B20_ReadTemp(CH1);
+      break;
+      
+    case CH2:
+      Temp=DS18B20_ReadTemp(CH2);
+      break;
+      
+    case CH3:
+      Temp=DS18B20_ReadTemp(CH3);
+      break;
+      
+    case CH4:
+      Temp=DS18B20_ReadTemp(CH4);
+      break;
+  }
+  
+  EnAbleTime(ON);
+  return Temp;
+}
+
+
+//================================================================
+//uchar *romPtr,对应器件的rom代码地址
+//uchar *ram,保存读出数据的地址
+//读出温度芯片Ram区数据，共有9个
+//读出后放置在ram指针里面，
+//读出以后将进行crc校验	
+//成功返回1，否则返回0
+//================================================================
+uint8_t ds18b20_read_ram(uint8_t channel, uint8_t * ram)
+{
+  uint8_t temp=0;
+	
+  //初始化
+  if(DS18B20_Rst(channel)==0) 
+    return 0;
+
+  DS18B20_Write_Byte(channel,DS18B20_SKIP_ROM);   		//总线上只有一个器件时,忽略地址匹配,
+  DS18B20_Write_Byte(channel,DS18B20_READ_RAM); 			//读RAM命令
+  for(temp=0;temp<9;temp++)
+  {
+    ram[temp]=DS18B20_Read_Byte(channel); 
+  }
+  return 1;
+	//if(crc8Check(ram,9)==0) {;}
+	//else {return 0;}
+}
+
+//================================================================
+//uchar *romPtr,对应器件的rom代码地址
+//uchar *ram,保存读出数据的地址
+//写入温度芯片Ram区数据，共有3个，同时包含了精度设置位
+//写入后同时启动保存功能，将数据保存到EEPROM
+//成功写入返回1，否则返回0
+//================================================================
+uint8_t ds18b20_write_ram(uint8_t channel,uint8_t *ram) 
+{
+  uint8_t temp=0;
+	//初始化
+  if(DS18B20_Rst(channel)==0) 
+    return 0; 
+
+  DS18B20_Write_Byte(channel,DS18B20_SKIP_ROM); //地址匹配
+  DS18B20_Write_Byte(channel,DS18B20_WRITE_RAM); //写RAM命令
+  for(temp=0;temp<3;temp++)
+  {
+    DS18B20_Write_Byte(channel,ram[temp]); 
+  }
+
+	//初始化
+  if(DS18B20_Rst(channel)==0) 
+    return 0; 
+  
+  DS18B20_Write_Byte(channel,DS18B20_SKIP_ROM); //地址匹配
+  DS18B20_Write_Byte(channel,DS18B20_COPY_RAM); //复制RAM命令
+  delay_us(2);
+	//DelayUs(10000);
+
+  return 1;
+}
+
+//================================================================
+//ds1820
+//温度传感器内存的操作
+//读出时间寄存器
+//================================================================
+uint16_t ds18b20_get_time(uint8_t channel)
+{
+  struct _DS18B20DATA ds18b20ReadBuffer;
+  ds18b20ReadBuffer.Temp=0;
+  ds18b20ReadBuffer.Time=0;
+  ds18b20ReadBuffer.Config=0;
+  if(ds18b20_read_ram(channel,(uint8_t *)&ds18b20ReadBuffer)!=0)
+  {
+    return ds18b20ReadBuffer.Time;
+  }
+  else 
+    return 0;
+}
+
+//================================================================
+//ds1820
+//温度传感器内存的操作
+//写入时间寄存器
+//================================================================
+uint8_t ds18b20_set_time(uint8_t channel,uint16_t time)
+{
+  struct _DS18B20DATA ds18b20ReadBuffer;
+  ds18b20ReadBuffer.Temp=0;
+  ds18b20ReadBuffer.Time=0;
+  ds18b20ReadBuffer.Config=0;
+  //读取原来的时间是否正确
+  if(ds18b20_read_ram(channel,(uint8_t *)&ds18b20ReadBuffer)!=0)
+  {
+    //赋值时间
+    ds18b20ReadBuffer.Time=time;
+    //写入时间
+    ds18b20_write_ram(channel, (uint8_t *)&ds18b20ReadBuffer.Time);
+    return 1;
+   }
+  else 
+    return 0;
+}
+
