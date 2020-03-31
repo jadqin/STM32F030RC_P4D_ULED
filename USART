@@ -1,0 +1,404 @@
+#include "usart.h"
+
+uint8_t TxBuffer3[BUFFERSIZE] = {0};
+uint8_t RxBuffer3[BUFFERSIZE] = {0};
+
+uint8_t USART1_RecData[USART1_BUFFERSIZE];
+uint16_t USART1_RecRp = 0;
+uint16_t USART1_RecWp = 0;
+uint8_t USART1_SaveData[USART1_BUFFERSIZE];
+uint16_t USART1_SaveRp = 0;
+uint16_t USART1_SaveWp = 0;
+
+uint8_t HMI_DataLen = 0;
+uint8_t HMI_TC = 0;
+enum 
+{
+	WAITHEAD1 = 0,
+	WAITHEAD2,
+	WAITLEN,
+	WAITDATA,
+	WAITEND
+}HMI_COM_STATUS;
+
+void HMI_UsartProcess(void)
+{
+	uint16_t nByte = 0;
+	if(USART1_RecWp < USART1_RecRp)
+	{
+		nByte = USART1_RecRp-USART1_RecWp;
+	}
+	else if(USART1_RecWp > USART1_RecRp)
+	{
+		nByte = (USART1_BUFFERSIZE+USART1_RecRp)-USART1_RecWp;
+	}
+	if(USART1_RecWp != USART1_RecRp)
+	{
+		while(nByte--)
+		{
+			switch(HMI_COM_STATUS)
+			{
+				case WAITHEAD1:
+				{
+					if(USART1_RecData[USART1_RecWp] == HMI_COM_HEAD1)
+					{
+						HMI_COM_STATUS = WAITHEAD2;
+					}
+				}break;
+				case WAITHEAD2:
+				{
+					if(USART1_RecData[USART1_RecWp] == HMI_COM_HEAD2)
+					{
+						HMI_COM_STATUS = WAITLEN;
+						USART1_SaveRp = 0;
+					}
+					else
+					{
+						HMI_COM_STATUS = WAITHEAD1;
+					}
+				}break;
+				case WAITLEN:
+				{
+					HMI_DataLen = USART1_RecData[USART1_RecWp];
+					HMI_COM_STATUS = WAITDATA;
+					USART1_SaveRp = 0;
+				}break;
+				case WAITDATA:
+				{					
+					if(HMI_DataLen > 1)
+					{
+						HMI_DataLen--;
+						USART1_SaveData[USART1_SaveRp++] = USART1_RecData[USART1_RecWp];
+					}
+					else
+					{						
+						USART1_SaveData[USART1_SaveRp++] = USART1_RecData[USART1_RecWp];
+						HMI_COM_STATUS = WAITHEAD1;
+						HMI_TC = 1;
+					}
+				}break;
+				default:
+					break;
+			}			
+			USART1_RecWp++;
+		}
+	}
+	if(HMI_TC == 1)
+	{
+		uint8_t i;
+		switch(USART1_SaveData[0])										//[0]			[1][2]		[3]   			[4][5] 
+		{
+			case 0x83:																	//cmd			addr			datalen			data
+			{
+				switch(GetVarValue(&USART1_SaveData[1]))
+				{
+					case 0x0039://EMISSION
+					{
+						for(i=0; i<4; i++)
+						{
+							if(WorkFlag.UseChannel&(0x01<<i))
+							{
+								Send_TLC5620(i, (uint8_t)((uint32_t)130*USER_EEP.Power[i]/100.0-1));
+								SetUV_LED(i, ON);
+							}
+						}							
+					}break;
+					case 0x003a://STOP
+					{
+						for(i=0; i<4; i++)
+						{
+							Send_TLC5620(i, 0);
+							SetUV_LED(i, OFF);
+							printf("Channel%d Use Time:%x\r\n",i ,ds18b20_get_time(CH1+i));
+						}						
+					}break;
+					case 0x003f://Menu
+					{
+						SendVarHalfWord(0x0040, GetVarValue(&USART1_SaveData[4]));
+						printf("Menu Cmd:%x\r\n",GetVarValue(&USART1_SaveData[4]));
+					}break;
+					case 0x0014://Channel1 Enable/Disable
+					{
+						if(USART1_SaveData[5])
+						{
+							WorkFlag.UseChannel |= 0x01;
+						}
+						else	
+						{
+							WorkFlag.UseChannel &= (~0x01);
+						}
+					}break;
+					case 0x0015://Channel2 Enable/Disable
+					{
+						if(USART1_SaveData[5])
+						{
+							WorkFlag.UseChannel |= 0x02;
+						}
+						else	
+						{
+							WorkFlag.UseChannel &= (~0x02);
+						}
+					}break;
+					case 0x0016://Channel3 Enable/Disable
+					{
+						if(USART1_SaveData[5])
+						{
+							WorkFlag.UseChannel |= 0x04;
+						}
+						else	
+						{
+							WorkFlag.UseChannel &= (~0x04);
+						}
+					}break;
+					case 0x0017://Channel4 Enable/Disable
+					{
+						if(USART1_SaveData[5])
+						{
+							WorkFlag.UseChannel |= 0x08;
+						}
+						else	
+						{
+							WorkFlag.UseChannel &= (~0x08);
+						}
+					}break;
+					case 0x0020://Set Channel1 Power
+					{
+						USER_EEP.Power[0] = GetVarValue(&USART1_SaveData[4]);
+						//FLASH_WriteByte(USER_EEP_ADDR, &USER_EEP.Flag1, sizeof(USER_EEP));						
+					}break;
+					case 0x0021://Set Channel2 Power
+					{
+						USER_EEP.Power[1] = GetVarValue(&USART1_SaveData[4]);
+						//FLASH_WriteByte(USER_EEP_ADDR, &USER_EEP.Flag1, sizeof(USER_EEP));						
+					}break;
+					case 0x0022://Set Channel3 Power
+					{
+						USER_EEP.Power[2] = GetVarValue(&USART1_SaveData[4]);
+						//FLASH_WriteByte(USER_EEP_ADDR, &USER_EEP.Flag1, sizeof(USER_EEP));						
+					}break;
+					case 0x0023://Set Channel4 Power
+					{
+						USER_EEP.Power[3] = GetVarValue(&USART1_SaveData[4]);
+						//FLASH_WriteByte(USER_EEP_ADDR, &USER_EEP.Flag1, sizeof(USER_EEP));						
+					}break;
+					case 0x0024://Set Channel1 Time
+					{
+						USER_EEP.Time[0] = GetVarValue32(&USART1_SaveData[4]);
+						//FLASH_WriteByte(USER_EEP_ADDR, &USER_EEP.Flag1, sizeof(USER_EEP));						
+					}break;
+					case 0x0026://Set Channel2 Time
+					{
+						USER_EEP.Time[1] = GetVarValue32(&USART1_SaveData[4]);
+						//FLASH_WriteByte(USER_EEP_ADDR, &USER_EEP.Flag1, sizeof(USER_EEP));						
+					}break;
+					case 0x0028://Set Channel3 Time
+					{
+						USER_EEP.Time[2] = GetVarValue32(&USART1_SaveData[4]);
+						//FLASH_WriteByte(USER_EEP_ADDR, &USER_EEP.Flag1, sizeof(USER_EEP));						
+					}break;
+					case 0x002a://Set Channel4 Time
+					{
+						USER_EEP.Time[3] = GetVarValue32(&USART1_SaveData[4]);
+						//FLASH_WriteByte(USER_EEP_ADDR, &USER_EEP.Flag1, sizeof(USER_EEP));						
+					}break;				
+					default:
+						break;
+				}
+			}break;
+			default:
+				break;
+		}
+		HMI_TC = 0;
+	}
+}
+
+uint16_t GetVarValue(uint8_t *p)
+{
+	uint16_t conv;
+	conv = *p;
+	p++;
+	conv <<= 8;
+	conv |= *p;
+	return conv;
+}
+
+uint32_t GetVarValue32(uint8_t *p)
+{
+	uint32_t conv;
+	uint8_t i;
+	for(i=0; i<4; i++)
+	{
+		conv <<= 8;
+		conv |= *p;
+		p++;
+	}
+	return conv;	
+}
+
+void Usart3_Init(uint16_t baud)
+{
+  USART_InitTypeDef USART_InitStructure;
+	NVIC_InitTypeDef  NVIC_InitStructure;
+  GPIO_InitTypeDef GPIO_InitStructure;
+  
+  /* Enable GPIO clock */
+  RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOB, (FunctionalState)ENABLE);
+  
+  /* Enable USART clock */
+  RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART3, (FunctionalState)ENABLE);
+  
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource10, GPIO_AF_4);//0 1 4
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource11, GPIO_AF_4);
+	
+	//串口使用的GPIO口配置  
+	// Configure USART3 Rx (PB.11) as input floating    
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_10 | GPIO_Pin_11;  
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;
+	GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+	GPIO_Init(GPIOB, &GPIO_InitStructure); 
+
+	NVIC_InitStructure.NVIC_IRQChannel = USART3_6_IRQn;
+	NVIC_InitStructure.NVIC_IRQChannelPriority = 1;
+	NVIC_InitStructure.NVIC_IRQChannelCmd = (FunctionalState)ENABLE;
+	NVIC_Init(&NVIC_InitStructure);	
+	
+  USART_InitStructure.USART_BaudRate = baud;
+  USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+  USART_InitStructure.USART_StopBits = USART_StopBits_1;
+  /* When using Parity the word length must be configured to 9 bits */
+  USART_InitStructure.USART_Parity = USART_Parity_No;
+  USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+  USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
+  USART_Init(USART3, &USART_InitStructure);	
+	
+	USART_ITConfig(USART3, USART_IT_RXNE, (FunctionalState)ENABLE);
+	
+	USART_Cmd(USART3, (FunctionalState)ENABLE);
+		
+}
+
+void Usart1_Init(uint32_t baud)
+{
+  USART_InitTypeDef USART_InitStructure;
+	NVIC_InitTypeDef  NVIC_InitStructure;
+  GPIO_InitTypeDef GPIO_InitStructure;
+  
+  /* Enable GPIO clock */
+  RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOA, (FunctionalState)ENABLE);
+  
+  /* Enable USART clock */
+  RCC_APB2PeriphClockCmd(RCC_APB2Periph_USART1, (FunctionalState)ENABLE);
+  
+	GPIO_PinAFConfig(GPIOA, GPIO_PinSource9, GPIO_AF_1);
+	GPIO_PinAFConfig(GPIOA, GPIO_PinSource10, GPIO_AF_1);
+	
+	//串口使用的GPIO口配置  
+	// Configure USART3 Rx (PB.11) as input floating    
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9 | GPIO_Pin_10;  
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;
+	GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+	GPIO_Init(GPIOA, &GPIO_InitStructure); 
+
+	NVIC_InitStructure.NVIC_IRQChannel = USART1_IRQn;
+	NVIC_InitStructure.NVIC_IRQChannelPriority = 1;
+	NVIC_InitStructure.NVIC_IRQChannelCmd = (FunctionalState)ENABLE;
+	NVIC_Init(&NVIC_InitStructure);	
+	
+  USART_InitStructure.USART_BaudRate = baud;
+  USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+  USART_InitStructure.USART_StopBits = USART_StopBits_1;
+  /* When using Parity the word length must be configured to 9 bits */
+  USART_InitStructure.USART_Parity = USART_Parity_No;
+  USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+  USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
+  USART_Init(USART1, &USART_InitStructure);	
+	
+	USART_ITConfig(USART1, USART_IT_RXNE, (FunctionalState)ENABLE);
+	
+	USART_Cmd(USART1, (FunctionalState)ENABLE);
+		
+}
+
+void SendVarWord(uint16_t addr, uint32_t wdata)
+{
+	uint8_t bdat;
+	
+	USART1_SendOneData(HMI_COM_HEAD1);
+	USART1_SendOneData(HMI_COM_HEAD2);
+	USART1_SendOneData(0x07);
+	USART1_SendOneData(0x82);	
+	USART1_SendOneData(addr>>8);
+	USART1_SendOneData(addr&0xff);
+	
+	bdat = (uint8_t)(wdata>>24);
+	USART1_SendOneData(bdat);
+	bdat = (uint8_t)(wdata>>16);
+	USART1_SendOneData(bdat);
+	bdat = (uint8_t)(wdata>>8);
+	USART1_SendOneData(bdat);
+	bdat = (uint8_t)(wdata>>0);
+	USART1_SendOneData(bdat);	
+}
+
+void SendVarHalfWord(uint16_t addr, uint16_t wdata)
+{
+	uint8_t bdat;
+	
+	USART1_SendOneData(HMI_COM_HEAD1);
+	USART1_SendOneData(HMI_COM_HEAD2);
+	USART1_SendOneData(0x05);
+	USART1_SendOneData(0x82);	
+	USART1_SendOneData(addr>>8);
+	USART1_SendOneData(addr&0xff);
+	
+	bdat = (uint8_t)(wdata>>8);
+	USART1_SendOneData(bdat);
+	bdat = (uint8_t)(wdata>>0);
+	USART1_SendOneData(bdat);		
+}
+
+void HMI_SendReadVar(uint16_t addr, uint8_t len)
+{
+	USART1_SendOneData(HMI_COM_HEAD1);
+	USART1_SendOneData(HMI_COM_HEAD2);
+	USART1_SendOneData(0x04);
+	USART1_SendOneData(0x83);	
+	USART1_SendOneData(addr>>8);
+	USART1_SendOneData(addr&0xff);
+	USART1_SendOneData(len);
+}
+
+int fputc(int ch,FILE *f)
+{
+    USART_SendData(USART3, (unsigned char) ch);
+    //等待发送完成
+    while(USART_GetFlagStatus(USART3,USART_FLAG_TC)!=SET);
+
+  return(ch);
+}
+
+void USART1_SendOneData(uint16_t udata)
+{
+	USART_SendData(USART1, udata);
+	while(USART_GetFlagStatus(USART1,USART_FLAG_TC)!=SET);		
+}
+
+
+void USART1_IRQHandler(void)
+{
+  if(USART_GetITStatus(USART1, USART_IT_RXNE) != RESET)
+  {
+		if(USART1_RecRp == USART1_BUFFERSIZE)
+		{
+			USART1_RecRp = 0;
+		}
+		USART1_RecData[USART1_RecRp++] = USART_ReceiveData(USART1);
+  }
+}
+
+
+
