@@ -1,0 +1,65 @@
+//STM32 FLASH采用页的读写
+
+#define WRITE_START_ADDR 	((uint32_t)(0x8000000 + 200*1024))
+
+#define USER_EEP_ADDR				(uint32_t)(WRITE_START_ADDR + 0*1024)
+
+void Eeprom_Init(void)
+{
+	FLASH_ReadByte(USER_EEP_ADDR, &USER_EEP.Flag1, sizeof(USER_EEP));
+	if((USER_EEP.Flag1 == 0x5a)&&(USER_EEP.Flag2 == 0xa5))
+	{
+		printf("Read From EEPROM\r\n");
+	}
+	else
+	{
+		USER_EEP.Flag1 = 0x5a;
+		USER_EEP.Power[0] = 80;
+		USER_EEP.Power[1] = 80;
+		USER_EEP.Power[2] = 80;
+		USER_EEP.Power[3] = 80;
+		USER_EEP.Time[0] = 99999;
+		USER_EEP.Time[1] = 99999;
+		USER_EEP.Time[2] = 99999;
+		USER_EEP.Time[3] = 99999;
+		USER_EEP.Flag2 = 0xa5;
+		FLASH_WriteByte(USER_EEP_ADDR, &USER_EEP.Flag1, sizeof(USER_EEP));
+		printf("Write To EEPROM\r\n");
+	}
+}
+
+void FLASH_WriteByte(uint32_t addr, uint8_t *p, uint16_t ByteNum)
+{
+	uint16_t HalfWord;
+	ByteNum = (ByteNum+1)/2;
+	FLASH_Unlock();
+	FLASH_ClearFlag(FLASH_FLAG_BSY | FLASH_FLAG_EOP | FLASH_FLAG_PGERR | FLASH_FLAG_WRPERR);
+	FLASH_ErasePage(addr);
+	if(ByteNum == 1)
+	{
+		HalfWord = *(p++);
+		FLASH_ProgramHalfWord(addr, HalfWord);
+	}
+	else
+	{
+		while(ByteNum--)
+		{
+			HalfWord = *(p++);
+			HalfWord |= *(p++)<<8;
+			FLASH_ProgramHalfWord(addr, HalfWord);
+			addr += 2;
+		}
+	}
+	FLASH_Lock();
+}
+
+void FLASH_ReadByte(uint32_t addr, uint8_t *p, uint16_t ByteNum)
+{
+	while(ByteNum--)
+	{
+		*(p++) = *((uint8_t *)addr++);
+	}
+}
+
+
+
